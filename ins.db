@@ -1,0 +1,10 @@
+create table tbl
+
+create column c1 u64
+
+load count
+
+append 15
+
+read
+
