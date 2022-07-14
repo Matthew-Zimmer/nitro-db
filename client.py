@@ -1,6 +1,6 @@
 import json
 import sys
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 def readColumnFile(table: str, column: str) -> List[Any]:
     with open(f'{table}/{column}', 'rb') as file:
@@ -144,7 +144,7 @@ def parseResult(data, i = 0) -> Tuple[int, Any]:
     else:
         raise RuntimeError(f'Unexpected byte: {data[i]}')
 
-def readResult(filename: str):
+def readResult(filename: str, options: Dict[str, bool]):
     with open(filename, 'rb') as file:
         data = file.read()
 
@@ -157,8 +157,10 @@ def readResult(filename: str):
         j, parsedResult = parseResult(data, j)
         parsedResults.append(parsedResult)
 
+    showHex = options.get('showHex', False)
+
     return {
-        'hex': data.hex(),
+        **({ 'hex': data.hex() } if showHex else {}),
         'data': parsedResults
     }
 
@@ -168,8 +170,10 @@ def main():
             print(json.dumps(readColumnFile(table, column)))
         case [table, column, 'stat']:
             print(json.dumps(statColumnFile(table, column)))
+        case [file, 'payload', '--show-hex']: 
+            print(json.dumps(readResult(file, { 'showHex': True })))
         case [file, 'payload']: 
-            print(json.dumps(readResult(file)))
+            print(json.dumps(readResult(file, {})))
         case _:
             json.dump(sys.argv, sys.stdout)
 

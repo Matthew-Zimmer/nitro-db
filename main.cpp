@@ -3,13 +3,17 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <fstream>
 #include <iostream>
 #include <exception>
 #include <filesystem>
+#include <string.h>
 
 using byte = std::uint8_t;
 using bytes = std::vector<byte>;
+
+bool verbose = false;
 
 enum class AttributeKind : byte {
     i8,
@@ -80,6 +84,8 @@ struct Attribute {
         Attribute_() {}
         ~Attribute_() {}
     } data;
+
+    Attribute() = default;
 
     Attribute(Attribute const& attr) : kind(attr.kind) {
         switch (kind)
@@ -174,27 +180,6 @@ struct Attribute {
     }
 };
 
-struct AttributeBaseView {
-    AttributeKind kind;
-    std::string name;
-    std::uint64_t count;
-};
-
-struct AttributeView : AttributeBaseView {
-    void* data;
-};
-
-struct AttributeFileView : AttributeBaseView {
-};
-
-struct TableView {
-    std::string name;
-    std::vector<AttributeView> attributes;
-};
-
-struct PayloadView {
-    std::vector<TableView> tables;
-};
 
 enum ControlMessage : byte {
     startPayload,
@@ -212,13 +197,6 @@ void serialize(T const& i, bytes& v) {
     std::copy(reinterpret_cast<byte const*>(&i), reinterpret_cast<byte const*>(&i) + sizeof(T), std::back_inserter(v));
 }
 
-template <typename T>
-void serialize(T* const& data, std::uint64_t count, bytes& v) {
-    v.reserve(v.size() + count * sizeof(T));
-    for (std::uint64_t i = 0; i < count; i++)
-        serialize(data[i], v);
-}
-
 void serialize(std::string const& s, bytes& v) {
     serialize(s.size(), v);
     std::copy(s.begin(), s.end(), std::back_inserter(v));
@@ -226,145 +204,6 @@ void serialize(std::string const& s, bytes& v) {
 
 void serialize(AttributeKind const& k, bytes& v) {
     serialize(static_cast<std::uint8_t>(k), v);
-}
-
-template <typename F>
-void serialize(AttributeBaseView const& a, bytes& v, F&& f) {
-    bool isReference = a.kind == AttributeKind::reference;
-
-    serialize(isReference ? ControlMessage::startReferenceAttribute : ControlMessage::startDataAttribute, v);
-
-    serialize(a.name, v);
-
-    if (!isReference)
-        serialize(a.kind, v);
-
-    serialize(a.count, v);
-
-    f();
-
-    serialize(isReference ? ControlMessage::endReferenceAttribute : ControlMessage::endDataAttribute, v);
-}
-
-void serialize(AttributeView const& a, bytes& v) {
-    serialize(static_cast<AttributeBaseView>(a), v, [&](){
-        switch (a.kind)
-        {
-            case AttributeKind::i8:
-                serialize(static_cast<std::int8_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::i16:
-                serialize(static_cast<std::int16_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::i32:
-                serialize(static_cast<std::int32_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::i64:
-                serialize(static_cast<std::int64_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::u8:
-                serialize(static_cast<std::uint8_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::u16:
-                serialize(static_cast<std::uint16_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::u32:
-                serialize(static_cast<std::uint32_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::u64:
-                serialize(static_cast<std::uint64_t*>(a.data), a.count, v);
-                break;
-            case AttributeKind::string:
-                serialize(static_cast<std::string*>(a.data), a.count, v);
-                break;
-            case AttributeKind::boolean:
-                serialize(static_cast<bool*>(a.data), a.count, v);
-                break;
-            case AttributeKind::float_:
-                serialize(static_cast<float*>(a.data), a.count, v);
-                break;
-            case AttributeKind::double_:
-                serialize(static_cast<double*>(a.data), a.count, v);
-                break;
-            case AttributeKind::reference:
-                serialize(static_cast<int*>(a.data), a.count, v);
-                break;
-        }
-    });
-}
-
-void serialize(Attribute const& a, bytes& v) {
-    switch (a.kind)
-    {
-        case AttributeKind::i8:
-            serialize(a.data.i8, v);
-            break;
-        case AttributeKind::i16:
-            serialize(a.data.i16, v);
-            break;
-        case AttributeKind::i32:
-            serialize(a.data.i32, v);
-            break;
-        case AttributeKind::i64:
-            serialize(a.data.i64, v);
-            break;
-        case AttributeKind::u8:
-            serialize(a.data.u8, v);
-            break;
-        case AttributeKind::u16:
-            serialize(a.data.u16, v);
-            break;
-        case AttributeKind::u32:
-            serialize(a.data.u32, v);
-            break;
-        case AttributeKind::u64:
-            serialize(a.data.u64, v);
-            break;
-        case AttributeKind::string:
-            serialize(a.data.string, v);
-            break;
-        case AttributeKind::boolean:
-            serialize(a.data.boolean, v);
-            break;
-        case AttributeKind::float_:
-            serialize(a.data.float_, v);
-            break;
-        case AttributeKind::double_:
-            serialize(a.data.double_, v);
-            break;
-        case AttributeKind::reference:
-            throw std::runtime_error("Internal error: I think");
-    }
-}
-
-void serialize(AttributeFileView const& a, FILE* fd, std::uint64_t size, bytes& v) {
-    serialize(static_cast<AttributeBaseView>(a), v, [&](){
-        v.reserve(v.size() + size);
-        std::uint8_t* p = new std::uint8_t[size];
-        fread(p, 1, size, fd);
-        std::copy(p, p + size, std::back_inserter(v));
-        delete[] p;
-    });
-}
-
-void serialize(TableView const& t, bytes& v) {
-    v.push_back(ControlMessage::startTable);
-
-    serialize(t.name, v);
-
-    for (auto&& a : t.attributes)
-        serialize(a, v);
-
-    v.push_back(ControlMessage::endTable);
-}
-
-void serialize(PayloadView const& p, bytes& v) {
-    v.push_back(ControlMessage::startPayload);
-
-    for (auto&& t : p.tables)
-        serialize(t, v);
-
-    v.push_back(ControlMessage::endPayload);
 }
 
 enum class InstructionKind {
@@ -375,7 +214,18 @@ enum class InstructionKind {
     readColumn,
     appendColumn,
     end,
-    loadCount,
+    send,
+    open,
+    close,
+    sort,
+    free,
+};
+
+enum class PayloadKind : byte {
+    payload,
+    table,
+    data,
+    ref,
 };
 
 struct Instruction {
@@ -388,7 +238,11 @@ struct Instruction {
         struct {} readColumn;
         struct { Attribute attr;  } appendColumn;
         struct {} end;
-        struct {} loadCount;
+        struct {} send;
+        struct { PayloadKind kind; } open;
+        struct { PayloadKind kind; } close;
+        struct {  } sort;
+        struct {  } free;
 
         Instruction_() {}
         ~Instruction_() {}
@@ -420,156 +274,26 @@ struct Instruction {
         case InstructionKind::end:
             data.end = i.data.end;
             break;
-        case InstructionKind::loadCount:
-            data.loadCount = i.data.loadCount;
+        case InstructionKind::send:
+            data.send = i.data.send;
+            break;
+        case InstructionKind::open:
+            data.open = i.data.open;
+            break;
+        case InstructionKind::close:
+            data.close = i.data.close;
+            break;
+        case InstructionKind::sort:
+            data.sort = i.data.sort;
+            break;
+        case InstructionKind::free:
+            data.free = i.data.free;
             break;
         }
     }
 };
 
-struct ColumnHandle {
-private:
-    std::string filename;
-    std::string name;
-    AttributeKind type;
-    std::uint64_t count;
-
-    long filesize(FILE* fd) {
-        fseek(fd, 0, SEEK_END);
-
-        auto size = ftell(fd);
-
-        fseek(fd, 0, SEEK_SET);
-
-        return size;
-    }
-
-public:
-    ColumnHandle() = default;
-    ColumnHandle(std::string const& table, std::string const& name, AttributeKind const& type) : filename(table + "/" + name), name(name), type(type), count(0) {
-        if (!std::filesystem::exists(filename)) {
-            std::ofstream f(filename);
-            f.flush();
-        }
-    }
-
-    std::string read(bytes& v) {
-        std::cout << "Reading: " << filename << std::endl;
-
-        FILE* fd = fopen(filename.c_str(), "rb");
-
-        if (fd == nullptr)
-            throw std::runtime_error("bad file");
-
-        long size = filesize(fd);
-
-        AttributeFileView attr;
-        attr.kind = type;
-        attr.count = count;
-        attr.name = name;
-
-        serialize(attr, fd, size, v);
-
-        fclose(fd);
-
-        return "";
-    }
-
-    std::string append(Attribute const& attr) {
-        if (attr.kind != type)
-            return "Cannot append to " + name + " type mismatch";
-
-        FILE* fd = fopen(filename.c_str(), "ab");
-
-        bytes b;
-        serialize(attr, b);
-
-        fwrite(b.data(), 1, b.size(), fd);
-
-        fclose(fd);
-
-        count++;
-
-        return "";
-    }
-    
-    std::string update() {
-        throw std::runtime_error("TODO");
-    }
-    
-    std::string delete_() {
-        throw std::runtime_error("TODO");
-    }
-
-    std::string loadCount() {
-        FILE* fd = fopen(filename.c_str(), "rb");
-
-        if (fd == nullptr)
-            return "bad file";
-
-        count = filesize(fd) / attributeSize(type);
-
-        return "";
-    }
-};
-
-struct TableHandle {
-private:
-    std::string name;
-    std::unordered_map<std::string, ColumnHandle> columns;
-    ColumnHandle* selectedHandle;
-public:
-    TableHandle() = default;
-    TableHandle(std::string const& name) : name(name) {
-        if (!std::filesystem::exists(name)) {
-            std::filesystem::create_directory(name);
-        }
-        else if (std::filesystem::status(name).type() != std::filesystem::file_type::directory) {
-            throw std::runtime_error("file: " + name + " exists but is not a directory");
-        }
-    }
-
-    void clearState() {
-        selectedHandle = nullptr;
-    }
-
-    std::string createColumn(std::string const& name, AttributeKind const& type) {
-        if (columns.find(name) != columns.end())
-            return "On Table: " + this->name + " column: " + name + " already exists";
-
-        columns[name] = ColumnHandle(this->name, name, type);
-        selectedHandle = &columns[name];
-
-        return "";
-    } 
-
-    std::string selectColumn(std::string const& name) {
-        if (columns.find(name) == columns.end())
-            return "Cannot select an non existent column named: " + name + " on table: " + this->name;
-        selectedHandle = &columns[name];
-        return "";
-    }
-
-    std::string readColumn(bytes& v) {
-        if (selectedHandle == nullptr)
-            return "Cannot read column when table " + name + " is selected but no column is selected";
-        return selectedHandle->read(v);
-    } 
-
-    std::string appendColumn(Attribute const& attr) {
-        if (selectedHandle == nullptr)
-            return "Cannot append column when table " + name + " is selected but no column is selected";
-        return selectedHandle->append(attr);
-    }
-
-    std::string loadCount() {
-        if (selectedHandle == nullptr)
-            return "Cannot load count when table " + name + " is selected but no column is selected";
-        return selectedHandle->loadCount();
-    }
-};
-
-#define abortIfFails(x) if (auto e = x; !e.empty()) return std::make_pair(bytes{}, e)
+#define abortIfFails(x) if (auto e = x; !e.empty()) return e
 
 std::string str(AttributeKind const& k) {
     switch (k) {
@@ -635,6 +359,16 @@ std::string str(Attribute const& attr) {
     throw std::system_error();
 }
 
+std::string str(PayloadKind p) {
+    switch (p) {
+    case PayloadKind::payload: return "payload";
+    case PayloadKind::table: return "table";
+    case PayloadKind::data: return "data";
+    case PayloadKind::ref: return "ref";
+    }
+    throw std::system_error();
+}
+
 void print(Instruction const& i) {
     switch (i.kind)
     {
@@ -652,82 +386,308 @@ void print(Instruction const& i) {
         return static_cast<void>(std::cout << "append " << str(i.data.appendColumn.attr)  << std::endl);
     case InstructionKind::end:
         return static_cast<void>(std::cout << "end" << std::endl);
-    case InstructionKind::loadCount:
-        return static_cast<void>(std::cout << "load count" << std::endl);
+    case InstructionKind::send:
+        return static_cast<void>(std::cout << "send" << std::endl);
+    case InstructionKind::open:
+        return static_cast<void>(std::cout << "open " << str(i.data.open.kind) << std::endl);
+    case InstructionKind::close:
+        return static_cast<void>(std::cout << "close " << str(i.data.open.kind) << std::endl);
+    case InstructionKind::sort:
+        return static_cast<void>(std::cout << "sort" << std::endl);
+    case InstructionKind::free:
+        return static_cast<void>(std::cout << "free" << std::endl);
+    }
+}
+
+struct ColumnInfo {
+    AttributeKind type;
+    std::uint64_t count;
+
+    ColumnInfo() = default;
+    ColumnInfo(AttributeKind k, std::uint64_t c) : type(k), count(c) {}
+};
+
+struct TableInfo {
+    std::unordered_map<std::string, ColumnInfo> columns;
+};
+
+void loadAttrDataFromBytes(Attribute& d, char* b) {
+    switch (d.kind)
+    {
+    case AttributeKind::i8:
+        return static_cast<void>(std::copy(b, b + 1, reinterpret_cast<char*>(&d.data.i8)));
+    case AttributeKind::i16:
+        return static_cast<void>(std::copy(b, b + 2, reinterpret_cast<char*>(&d.data.i16)));
+    case AttributeKind::i32:
+        return static_cast<void>(std::copy(b, b + 4, reinterpret_cast<char*>(&d.data.i32)));
+    case AttributeKind::i64:
+        return static_cast<void>(std::copy(b, b + 8, reinterpret_cast<char*>(&d.data.i64)));
+    case AttributeKind::u8:
+        return static_cast<void>(std::copy(b, b + 1, reinterpret_cast<char*>(&d.data.u8)));
+    case AttributeKind::u16:
+        return static_cast<void>(std::copy(b, b + 2, reinterpret_cast<char*>(&d.data.u16)));
+    case AttributeKind::u32:
+        return static_cast<void>(std::copy(b, b + 4, reinterpret_cast<char*>(&d.data.u32)));
+    case AttributeKind::u64:
+        return static_cast<void>(std::copy(b, b + 8, reinterpret_cast<char*>(&d.data.u64)));
+    case AttributeKind::string:
+        throw "todo";
+    case AttributeKind::boolean:
+        return static_cast<void>(std::copy(b, b + 1, reinterpret_cast<char*>(&d.data.boolean)));
+    case AttributeKind::float_:
+        return static_cast<void>(std::copy(b, b + 4, reinterpret_cast<char*>(&d.data.float_)));
+    case AttributeKind::double_:
+        return static_cast<void>(std::copy(b, b + 8, reinterpret_cast<char*>(&d.data.double_)));
+    case AttributeKind::reference:
+        throw "todo";
     }
 }
 
 struct DataBase {
 private:
-    std::unordered_map<std::string, TableHandle> tables;
-    TableHandle* selectedHandle;
+    // vm registers
+    std::string table;
+    std::string column;
+    std::vector<std::uint64_t> ordering;
+    std::vector<Attribute> data;
+    bytes payload;
+
+    // vm state
+    std::unordered_map<std::string, TableInfo> tables;
+    std::string dumpFile;
+
+    std::string columnFileName(std::string const& table, std::string const& column) {
+        return table + "/" + column;
+    }
+   
+    void createTableFile(std::string const& table) {
+        std::filesystem::create_directory(table);
+    }
+
+    void createColumnFile(std::string const& table, std::string const& column) {
+        std::ofstream f(columnFileName(table, column));
+        f.flush();
+    }
+
+    std::fstream openColumnFile(std::string const& table, std::string const& column) {
+        return std::fstream(columnFileName(table, column), std::ios::binary);
+    }
+
+    std::fstream appendColumnFile(std::string const& table, std::string const& column) {
+        return std::fstream(columnFileName(table, column), std::ios::binary | std::ios::app);
+    }
+
+    std::uint64_t columnCount(std::string const& table, std::string const& column) {
+        return tables[table].columns[column].count;
+    }
+
+    std::uint64_t addColumnCount(std::string const& table, std::string const& column, std::uint64_t amount) {
+        return tables[table].columns[column].count += amount;
+    }
+
+    AttributeKind columnType(std::string const& table, std::string const& column) {
+        return tables[table].columns[column].type;
+    }
+
+    void readAttributes(FILE* fd, std::vector<Attribute>& d, std::uint64_t count, AttributeKind type) {
+        auto n = d.size();
+        d.resize(n + count);
+        auto s = attributeSize(type);
+        auto ss = s * count;
+        char* b = new char[ss];
+        fread(b, 1, ss, fd);
+
+        std::uint64_t j = 0;
+        for (auto i = n; i < n + count; i++, j += s) {
+            d[i].kind = type;
+            loadAttrDataFromBytes(d[i], b + j);
+        }
+
+        delete[] b;
+    }
+
 public:
+    DataBase(std::string const& dumpFile) : dumpFile(dumpFile) {}
 
     void clearState() {
-        for (auto&& [k, v] : tables)
-            v.clearState();
-        selectedHandle = nullptr;
+        table = "";
+        column = "";
+        ordering.clear();
+        data.clear();
+        payload.clear();
+        data.shrink_to_fit();
+        payload.shrink_to_fit();
     }
 
     std::string createTable(std::string const& name) {
-        if (tables.find(name) != tables.end())
+        if (tables.contains(name))
             return "Table: " + name + " already exists";
 
-        tables[name] = TableHandle(name);
-        selectedHandle = &tables[name];
+        tables[name] = TableInfo();
+        createTableFile(name);
 
         return "";
     }
 
     std::string createColumn(std::string const& name, AttributeKind const& type) {
-        if (selectedHandle == nullptr)
-            return "Cannot create column when no table is selected";
-        return selectedHandle->createColumn(name, type);
+        if (tables[table].columns.contains(name))
+            return "Column: " + name + " already exists on table" + table;
+
+        tables[table].columns[name] = ColumnInfo(type, 0);
+
+        createColumnFile(table, name);
+        
+        return "";
     }
 
     std::string selectTable(std::string const& name) {
-        if (tables.find(name) == tables.end())
+        if (!tables.contains(name))
             return "Cannot select an non existent table named: " + name;
-        selectedHandle = &tables[name];
+        
+        table = name;
+
         return "";
     }
 
     std::string selectColumn(std::string const& name) {
-        if (selectedHandle == nullptr)
-            return "A table is not selected to select to a column";
-        return selectedHandle->selectColumn(name);
+        if (!tables[table].columns.contains(name))
+            return "Cannot select an non existent column named: " + name + " on table " + table;
+        
+        column = name;
+
+        return "";
     }  
 
-    std::string readColumn(bytes& v) {
-        if (selectedHandle == nullptr)
-            return "A table is not selected to read from a column";
-        return selectedHandle->readColumn(v);
+    std::string readColumn() {
+        auto f = fopen(columnFileName(table, column).c_str(), "rb");
+        auto c = columnCount(table, column);
+        auto t = columnType(table, column);
+        readAttributes(f, data, c, t);
+
+        fclose(f);
+
+        return "";
     }
 
     std::string appendColumn(Attribute const& attr) {
-        if (selectedHandle == nullptr)
-            return "A table is not selected to append to a column";
-        return selectedHandle->appendColumn(attr);
+        auto f = appendColumnFile(table, column);
+        auto s = attributeSize(attr.kind);
+        switch (attr.kind) {
+        case AttributeKind::i8:  f.write(reinterpret_cast<char const*>(&attr.data.i8), s); break;
+        case AttributeKind::i16: f.write(reinterpret_cast<char const*>(&attr.data.i16), s); break;
+        case AttributeKind::i32: f.write(reinterpret_cast<char const*>(&attr.data.i32), s); break;
+        case AttributeKind::i64: f.write(reinterpret_cast<char const*>(&attr.data.i64), s); break;
+        case AttributeKind::u8:  f.write(reinterpret_cast<char const*>(&attr.data.u8), s); break;
+        case AttributeKind::u16: f.write(reinterpret_cast<char const*>(&attr.data.u16), s); break;
+        case AttributeKind::u32: f.write(reinterpret_cast<char const*>(&attr.data.u32), s); break;
+        case AttributeKind::u64: f.write(reinterpret_cast<char const*>(&attr.data.u64), s); break;
+        case AttributeKind::boolean: f.write(reinterpret_cast<char const*>(&attr.data.boolean), s); break;
+        case AttributeKind::float_: f.write(reinterpret_cast<char const*>(&attr.data.float_), s); break;
+        case AttributeKind::double_: f.write(reinterpret_cast<char const*>(&attr.data.double_), s); break;
+        case AttributeKind::string: return "Todo append string column";
+        case AttributeKind::reference: f.write(reinterpret_cast<char const*>(&attr.data.reference), s); break;
+        }
+
+        addColumnCount(table, column, 1);
+
+        return "";
     }
 
-    std::string loadCount() {
-        if (selectedHandle == nullptr)
-            return "A table is not selected to load count for a column";
-        return selectedHandle->loadCount();
+    // copies the data from data to payload
+    // assumes that there is only one column loaded
+    std::string send() {
+        auto count = columnCount(table, column);
+        auto type = columnType(table, column);
+        serialize(column, payload);
+        serialize(type, payload);
+        serialize(count, payload);
+        switch (type) {
+        case AttributeKind::i8:        if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.i8, payload); }        else { for (auto&& x : data) serialize(x.data.i8, payload); } break;
+        case AttributeKind::i16:       if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.i16, payload); }       else { for (auto&& x : data) serialize(x.data.i16, payload); } break;
+        case AttributeKind::i32:       if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.i32, payload); }       else { for (auto&& x : data) serialize(x.data.i32, payload); } break;
+        case AttributeKind::i64:       if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.i64, payload); }       else { for (auto&& x : data) serialize(x.data.i64, payload); } break;
+        case AttributeKind::u8:        if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.u8, payload); }        else { for (auto&& x : data) serialize(x.data.u8, payload); } break;
+        case AttributeKind::u16:       if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.u16, payload); }       else { for (auto&& x : data) serialize(x.data.u16, payload); } break;
+        case AttributeKind::u32:       if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.u32, payload); }       else { for (auto&& x : data) serialize(x.data.u32, payload); } break;
+        case AttributeKind::u64:       if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.u64, payload); }       else { for (auto&& x : data) serialize(x.data.u64, payload); } break;
+        case AttributeKind::boolean:   if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.boolean, payload); }   else { for (auto&& x : data) serialize(x.data.boolean, payload); } break;
+        case AttributeKind::float_:    if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.float_, payload); }    else { for (auto&& x : data) serialize(x.data.float_, payload); } break;
+        case AttributeKind::double_:   if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.double_, payload); }   else { for (auto&& x : data) serialize(x.data.double_, payload); } break;
+        case AttributeKind::string:    if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.string, payload); }    else { for (auto&& x : data) serialize(x.data.string, payload); } break;
+        case AttributeKind::reference: if (!ordering.empty()) { for (std::uint64_t idx : ordering) serialize(data[idx].data.reference, payload); } else { for (auto&& x : data) serialize(x.data.reference, payload); } break;
+        }
+
+        return "";
     }
 
-    std::pair<bytes, std::string> execute(std::vector<Instruction> const& instructions) {
+    std::string open(PayloadKind k) {
+        switch (k)
+        {
+        case PayloadKind::payload: payload.push_back(static_cast<byte>(ControlMessage::startPayload)); break;
+        case PayloadKind::table: payload.push_back(static_cast<byte>(ControlMessage::startTable)); serialize(table, payload); break;
+        case PayloadKind::data: payload.push_back(static_cast<byte>(ControlMessage::startDataAttribute)); break;
+        case PayloadKind::ref: payload.push_back(static_cast<byte>(ControlMessage::startReferenceAttribute)); break;
+        }
+        return "";
+    }
+
+    std::string close(PayloadKind k) {
+        switch (k)
+        {
+        case PayloadKind::payload: payload.push_back(static_cast<byte>(ControlMessage::endPayload)); break;
+        case PayloadKind::table: payload.push_back(static_cast<byte>(ControlMessage::endTable)); break;
+        case PayloadKind::data: payload.push_back(static_cast<byte>(ControlMessage::endDataAttribute)); break;
+        case PayloadKind::ref: payload.push_back(static_cast<byte>(ControlMessage::endReferenceAttribute)); break;
+        }
+        return "";
+    }
+
+    // assumes that there is only one column loaded
+    std::string sort() {
+        ordering.clear();
+
+        auto type = columnType(table, column);
+        auto count = columnCount(table, column);
+        ordering.reserve(count);
+
+        for (std::uint64_t i = 0; i < count; i++)
+            ordering.push_back(i);
+
+        switch (type) {
+        case AttributeKind::i8:        std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.i8 < data[r].data.i8; }); break;
+        case AttributeKind::i16:       std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.i16 < data[r].data.i16; }); break;
+        case AttributeKind::i32:       std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.i32 < data[r].data.i32; }); break;
+        case AttributeKind::i64:       std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.i64 < data[r].data.i64; }); break;
+        case AttributeKind::u8:        std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.u8 < data[r].data.u8; }); break;
+        case AttributeKind::u16:       std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.u16 < data[r].data.u16; }); break;
+        case AttributeKind::u32:       std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.u32 < data[r].data.u32; }); break;
+        case AttributeKind::u64:       std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.u64 < data[r].data.u64; }); break;
+        case AttributeKind::boolean:   std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.boolean < data[r].data.boolean; }); break;
+        case AttributeKind::float_:    std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.float_ < data[r].data.float_; }); break;
+        case AttributeKind::double_:   std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.double_ < data[r].data.double_; }); break;
+        case AttributeKind::string:    std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.string < data[r].data.string; }); break;
+        case AttributeKind::reference: std::sort(ordering.begin(), ordering.end(), [&](std::uint64_t l, std::uint64_t r){ return data[l].data.reference < data[r].data.reference; }); break;
+        }
+        return "";
+    }
+
+    std::string free() {
+        data.resize(0);
+        return "";
+    }
+
+    std::string execute(std::vector<Instruction> const& instructions) {
         clearState();
 
         std::uint64_t ic = 0;
         std::uint64_t n = instructions.size();
 
-        bytes b;
-
         while (ic < n) {
             auto& ins = instructions[ic];
-            std::cout << "Executing: ";
-            print(ins);
+            if (verbose) {
+                std::cout << "Executing: ";
+                print(ins);
+            }
             switch (ins.kind) {
             case InstructionKind::createTable:
                 abortIfFails(createTable(ins.data.createTable.name));
@@ -746,24 +706,43 @@ public:
                 ic++;
                 break;
             case InstructionKind::readColumn:
-                abortIfFails(readColumn(b));
+                abortIfFails(readColumn());
                 ic++;
                 break;
             case InstructionKind::appendColumn:
                 abortIfFails(appendColumn(ins.data.appendColumn.attr));
                 ic++;
                 break;
-            case InstructionKind::loadCount:
-                abortIfFails(loadCount());
-                ic++;
-                break;
             case InstructionKind::end:
                 goto end;
+            case InstructionKind::send:
+                abortIfFails(send());
+                ic++;
+                break;
+            case InstructionKind::open:
+                abortIfFails(open(ins.data.open.kind));
+                ic++;
+                break;
+            case InstructionKind::close:
+                abortIfFails(close(ins.data.close.kind));
+                ic++;
+                break;
+            case InstructionKind::sort:
+                abortIfFails(sort());
+                ic++;
+                break;
+            case InstructionKind::free:
+                abortIfFails(free());
+                ic++;
+                break;
             }
         }
 
     end:
-        return std::make_pair(b, "");
+        std::ofstream f(dumpFile);
+        for (auto&& b : payload)
+            f << b;
+        return "";
     }
 
 };
@@ -814,7 +793,6 @@ void parseAttr(std::string const& word, Attribute& attr) {
         attr.kind = AttributeKind::string;
     }
     else if (auto i = word.find_first_of('.'); i != static_cast<std::size_t>(-1) && i == word.find_last_of('.')) {
-        std::cout << i << std::endl;
         attr.data.double_ = std::stod(word);
         attr.kind = AttributeKind::double_;
     }
@@ -822,6 +800,14 @@ void parseAttr(std::string const& word, Attribute& attr) {
         attr.data.u64 = std::stol(word);
         attr.kind = AttributeKind::u64;
     }
+}
+
+PayloadKind parsePayloadKind(std::string const& word) {
+    if (word == "payload") return PayloadKind::payload;
+    else if (word == "table") return PayloadKind::table;
+    else if (word == "data") return PayloadKind::data;
+    else if (word == "ref") return PayloadKind::ref;
+    else throw std::runtime_error("Imma reading bullshit here");
 }
 
 std::vector<Instruction> loadInstructions(std::string const& filename) {
@@ -835,7 +821,9 @@ std::vector<Instruction> loadInstructions(std::string const& filename) {
         auto words = split(line, ' ');
         auto n = words.size();
         if (n > 0) {
-            if (words[0] == "select") {
+            if (words[0].starts_with("//"))
+                continue;
+            else if (words[0] == "select") {
                 if (n == 3) {
                     if (words[1] == "table") {
                         Instruction ins;
@@ -859,7 +847,7 @@ std::vector<Instruction> loadInstructions(std::string const& filename) {
                         Instruction ins;
                         ins.kind = InstructionKind::createTable;
                         ins.data.createTable.name = words[2];
-                        instructions.push_back(ins);
+                        instructions.push_back(ins);                        
                         continue;
                     }
                 }
@@ -897,10 +885,38 @@ std::vector<Instruction> loadInstructions(std::string const& filename) {
                 instructions.push_back(ins);
                 continue;
             }
-            else if (words[0] == "load" && n == 2 && words[1] == "count") {
+            else if (words[0] == "send") {
                 Instruction ins;
-                ins.kind = InstructionKind::loadCount;
-                ins.data.loadCount = {};
+                ins.kind = InstructionKind::send;
+                ins.data.send = {};
+                instructions.push_back(ins);
+                continue;
+            }
+            else if (words[0] == "open" && n == 2) {
+                Instruction ins;
+                ins.kind = InstructionKind::open;
+                ins.data.open.kind = parsePayloadKind(words[1]);
+                instructions.push_back(ins);
+                continue;
+            }
+            else if (words[0] == "close" && n == 2) {
+                Instruction ins;
+                ins.kind = InstructionKind::close;
+                ins.data.close.kind = parsePayloadKind(words[1]);
+                instructions.push_back(ins);
+                continue;
+            }
+            else if (words[0] == "sort") {
+                Instruction ins;
+                ins.kind = InstructionKind::sort;
+                ins.data.sort = {};
+                instructions.push_back(ins);
+                continue;
+            }
+            else if (words[0] == "free") {
+                Instruction ins;
+                ins.kind = InstructionKind::free;
+                ins.data.free = {};
                 instructions.push_back(ins);
                 continue;
             }
@@ -914,28 +930,24 @@ std::vector<Instruction> loadInstructions(std::string const& filename) {
 
 
 int main(int argc, char** argv) {
-    if (argc != 2) return 1;
+    if (argc < 2) return 1;
     
-    auto filename = argv[1];
+    std::string filename = argv[1];
+  
+    if (argc == 3) { //} && strcmp(argv[2], "--verbose") == 1) {
+        verbose = true;
+    }
 
     std::cout << "Loading file: " << filename << std::endl;
 
-    DataBase db;
+    DataBase db("out.hex");
 
     auto instructions = loadInstructions(filename);
 
     std::cout << "Loaded Instructions (" << instructions.size() << ")" << std::endl;
-    for (auto&& i : instructions)
-        print(i);
 
     auto opt = db.execute(instructions);
 
-    if (opt.second.empty()) {
-        std::ofstream file("out.hex", std::ios::binary);
-        for (auto& b : opt.first)
-            file << b;
-    } 
-    else {
-        std::cerr << opt.second << std::endl;
-    }
+    if (!opt.empty())
+        std::cerr << "ERROR: " << opt << std::endl;
 }

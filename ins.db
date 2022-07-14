@@ -1,10 +1,51 @@
 create table tbl
 
+select table tbl
+
 create column c1 u64
 
-load count
+select column c1
 
-append 15
+append 0
+
+append 1
+
+create column c2 u64
+
+select column c2
+
+append 1
+
+append 0
 
 read
 
+// sort
+
+open payload
+
+open table
+
+open data
+
+send
+
+free
+
+close data
+
+select column c1
+
+read
+
+open data
+
+send
+
+free
+
+close data
+
+close table
+
+close payload
